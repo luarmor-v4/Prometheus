@@ -1,6 +1,7 @@
 /**
  * Prometheus Discord Bot
  * With Roblox/LuaU Support
+ * CORRECTED VERSION - Uses src/cli.lua path
  * 
  * @version 1.1.0
  */
@@ -17,6 +18,7 @@ const http = require('http');
 // ============================================================
 const PROMETHEUS_PATH = process.env.PROMETHEUS_PATH || './prometheus';
 const LUA_PATH = process.env.LUA_PATH || 'lua5.1';
+const PROMETHEUS_CLI = path.join(PROMETHEUS_PATH, 'src', 'cli.lua'); // ← CORRECTED PATH
 const MAX_CODE_LENGTH = 500000; // 500KB max
 const TIMEOUT_MS = 60000; // 60 seconds
 
@@ -105,7 +107,7 @@ function deleteFileSafe(filepath) {
 }
 
 // ============================================================
-// OBFUSCATE FUNCTION
+// OBFUSCATE FUNCTION - CORRECTED PATH
 // ============================================================
 async function obfuscate(luaCode, preset = 'Medium') {
   return new Promise(async (resolve, reject) => {
@@ -118,24 +120,31 @@ async function obfuscate(luaCode, preset = 'Medium') {
       // Write input file
       await writeFileSafe(inputFile, luaCode);
 
-      // Build command
-      const command = `cd "${PROMETHEUS_PATH}" && "${LUA_PATH}" cli.lua --preset ${preset} "${inputFile}" --out "${outputFile}"`;
+      // ✅ CORRECTED: Build command with src/cli.lua path
+      const command = `cd "${PROMETHEUS_PATH}" && "${LUA_PATH}" "src/cli.lua" --preset ${preset} "${inputFile}" --out "${outputFile}"`;
+      
+      console.log(`[DEBUG] Executing: ${command}`);
 
       // Execute
       exec(command, { 
         maxBuffer: 1024 * 1024 * 50,
-        timeout: TIMEOUT_MS 
+        timeout: TIMEOUT_MS,
+        cwd: PROMETHEUS_PATH // Set working directory
       }, async (error, stdout, stderr) => {
         // Cleanup input
         await deleteFileSafe(inputFile);
 
         if (error) {
+          console.error('[ERROR] Obfuscation failed:', stderr || error.message);
           reject(new Error(stderr || error.message));
           return;
         }
 
         // Check output file
         if (!fs.existsSync(outputFile)) {
+          console.error('[ERROR] Output file not created');
+          console.error('[STDOUT]', stdout);
+          console.error('[STDERR]', stderr);
           reject(new Error('Output file not created'));
           return;
         }
@@ -143,12 +152,15 @@ async function obfuscate(luaCode, preset = 'Medium') {
         try {
           const obfuscatedCode = await readFileSafe(outputFile);
           await deleteFileSafe(outputFile);
+          console.log(`[SUCCESS] Obfuscated ${luaCode.length} -> ${obfuscatedCode.length} bytes`);
           resolve(obfuscatedCode);
         } catch (e) {
+          console.error('[ERROR] Reading output:', e);
           reject(e);
         }
       });
     } catch (e) {
+      console.error('[ERROR] Setup failed:', e);
       await deleteFileSafe(inputFile);
       reject(e);
     }
@@ -161,12 +173,27 @@ async function obfuscate(luaCode, preset = 'Medium') {
 client.on('ready', () => {
   console.log('');
   console.log('🤖 ═══════════════════════════════════════════════════════');
-  console.log(`🤖  Bot logged in as ${client.user.tag}`);
+  console.log(`🤖  Bot: ${client.user.tag}`);
   console.log('🤖 ═══════════════════════════════════════════════════════');
-  console.log(`📂  Prometheus: ${PROMETHEUS_PATH}`);
+  console.log(`📂  Prometheus Path: ${PROMETHEUS_PATH}`);
+  console.log(`📜  CLI Path: ${PROMETHEUS_CLI}`);
   console.log(`🔧  Lua Runtime: ${LUA_PATH}`);
+  console.log(`✅  CLI Exists: ${fs.existsSync(PROMETHEUS_CLI) ? 'YES' : 'NO'}`);
   console.log('🎮  Roblox/LuaU: Supported');
   console.log('');
+  console.log('📋  Commands:');
+  console.log('    !help           - Show help');
+  console.log('    !presets        - List presets');
+  console.log('    !obfuscate      - Obfuscate code');
+  console.log('');
+  console.log('🤖 ═══════════════════════════════════════════════════════');
+  console.log('');
+  
+  // Check if CLI exists
+  if (!fs.existsSync(PROMETHEUS_CLI)) {
+    console.error('❌ ERROR: Prometheus CLI not found at:', PROMETHEUS_CLI);
+    console.error('❌ Please check PROMETHEUS_PATH environment variable');
+  }
   
   client.user.setActivity('!help | Lua Obfuscator', { type: 'WATCHING' });
 });
@@ -208,6 +235,11 @@ client.on('messageCreate', async (message) => {
           name: '❓ !help', 
           value: 'Show this message', 
           inline: false 
+        },
+        {
+          name: '🔍 !status',
+          value: 'Check bot status',
+          inline: false
         }
       )
       .addFields({
@@ -223,6 +255,41 @@ client.on('messageCreate', async (message) => {
       .setFooter({ text: 'Powered by Prometheus' })
       .setTimestamp();
 
+    return message.reply({ embeds: [embed] });
+  }
+
+  // ============================================================
+  // COMMAND: !status (untuk debug)
+  // ============================================================
+  if (lowerContent === '!status') {
+    const cliExists = fs.existsSync(PROMETHEUS_CLI);
+    const prometheusPathExists = fs.existsSync(PROMETHEUS_PATH);
+    
+    const embed = new EmbedBuilder()
+      .setTitle('🔍 Bot Status')
+      .setColor(cliExists ? '#00FF00' : '#FF0000')
+      .addFields(
+        { name: 'Prometheus Path', value: `\`${PROMETHEUS_PATH}\``, inline: false },
+        { name: 'Path Exists', value: prometheusPathExists ? '✅ Yes' : '❌ No', inline: true },
+        { name: 'CLI Path', value: `\`${PROMETHEUS_CLI}\``, inline: false },
+        { name: 'CLI Exists', value: cliExists ? '✅ Yes' : '❌ No', inline: true },
+        { name: 'Lua Runtime', value: `\`${LUA_PATH}\``, inline: true },
+        { name: 'Status', value: cliExists ? '🟢 Operational' : '🔴 CLI Not Found', inline: false }
+      );
+    
+    if (!cliExists) {
+      embed.addFields({
+        name: '⚠️ Troubleshooting',
+        value: [
+          '1. Check if Prometheus is cloned',
+          '2. CLI should be at `prometheus/src/cli.lua`',
+          '3. Set PROMETHEUS_PATH env variable correctly',
+          '4. Restart the bot'
+        ].join('\n'),
+        inline: false
+      });
+    }
+    
     return message.reply({ embeds: [embed] });
   }
 
@@ -275,6 +342,26 @@ client.on('messageCreate', async (message) => {
   // COMMAND: !obfuscate / !obf
   // ============================================================
   if (lowerContent.startsWith('!obfuscate') || lowerContent.startsWith('!obf')) {
+    
+    // Check if CLI exists before processing
+    if (!fs.existsSync(PROMETHEUS_CLI)) {
+      return message.reply({
+        content: [
+          '❌ **Error: Prometheus CLI not found!**',
+          '',
+          `Expected location: \`${PROMETHEUS_CLI}\``,
+          '',
+          '**Troubleshooting:**',
+          '1. Ensure Prometheus is cloned in the correct location',
+          '2. CLI should be at `prometheus/src/cli.lua`',
+          '3. Check PROMETHEUS_PATH environment variable',
+          '4. Contact bot administrator',
+          '',
+          'Use `!status` to check bot configuration.'
+        ].join('\n')
+      });
+    }
+    
     const args = content.split(/\s+/);
     
     // Find preset in args
@@ -325,13 +412,15 @@ client.on('messageCreate', async (message) => {
           files: [file]
         });
       } catch (error) {
+        console.error('[ERROR] File obfuscation:', error);
         await loadingMsg.edit([
           `❌ Error: ${error.message}`,
           '',
           '💡 **Tips:**',
-          '• Try a lighter preset (Minify, Weak)',
+          '• Try a lighter preset (Minify, Weak, RobloxWeak)',
           '• Check your code for syntax errors',
-          '• For Roblox, remove type annotations'
+          '• For Roblox, remove type annotations if present',
+          '• Use `!status` to check bot configuration'
         ].join('\n'));
       }
       return;
@@ -400,13 +489,15 @@ client.on('messageCreate', async (message) => {
         });
       }
     } catch (error) {
+      console.error('[ERROR] Code obfuscation:', error);
       await loadingMsg.edit([
         `❌ Error: ${error.message}`,
         '',
         '💡 **Tips:**',
         '• Try a lighter preset (Minify, Weak, RobloxWeak)',
         '• Check your code for syntax errors',
-        '• For Roblox, remove type annotations if present'
+        '• For Roblox, remove type annotations if present',
+        '• Use `!status` to check bot configuration'
       ].join('\n'));
     }
   }
@@ -415,18 +506,37 @@ client.on('messageCreate', async (message) => {
 // ============================================================
 // ERROR HANDLING
 // ============================================================
-client.on('error', console.error);
+client.on('error', (error) => {
+  console.error('Discord client error:', error);
+});
+
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
 });
 
 // ============================================================
 // LOGIN
 // ============================================================
 const token = process.env.DISCORD_TOKEN;
+
 if (!token) {
-  console.error('❌ DISCORD_TOKEN environment variable is required!');
+  console.error('');
+  console.error('❌ ═══════════════════════════════════════════════════════');
+  console.error('❌  ERROR: DISCORD_TOKEN environment variable is required!');
+  console.error('❌ ═══════════════════════════════════════════════════════');
+  console.error('');
+  console.error('Set DISCORD_TOKEN in your environment:');
+  console.error('  export DISCORD_TOKEN="your_bot_token_here"');
+  console.error('');
   process.exit(1);
 }
 
-client.login(token);
+console.log('🔄 Connecting to Discord...');
+client.login(token).catch(err => {
+  console.error('❌ Failed to login:', err.message);
+  process.exit(1);
+});
